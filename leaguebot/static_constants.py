@@ -77,3 +77,11 @@ class ScreepsError(Exception):
 
     def __str__(self):
         return self.message
+
+
+class TooManyRequestsError(Exception):
+    def __init__(self, data):
+        self.message = "Too many requests! {}".format(data)
+
+    def __str__(self):
+        return self.message

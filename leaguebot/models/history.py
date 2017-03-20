@@ -1,10 +1,11 @@
 import requests
+import time
 from requests.packages.urllib3.exceptions import NewConnectionError
 
 from leaguebot import app
 from leaguebot.models import user_info
 from leaguebot.services import redis_data, redis_queue
-from leaguebot.static_constants import ScreepsError
+from leaguebot.static_constants import ScreepsError, TooManyRequestsError
 from leaguebot.static_constants import scout, civilian, general_attacker, dismantling_attacker, healer, melee_attacker, \
     ranged_attacker, tough_attacker, work_and_carry_attacker, KEEP_IN_QUEUE_FOR_MAX_TICKS_UNSUCCESSFUL
 
@@ -32,6 +33,7 @@ def grab_history(room, tick):
         invalid json, a empty dummy object is returned.
     :rtype: None | dict[str, Any]
     :raises ScreepsError: if a non-OK non-404 result is returned
+    :raises TooManyRequestsError: if a result 429 is returned
     """
     url = HISTORY_URL_FORMAT.format(room=room, tick=tick)
     try:
@@ -42,6 +44,8 @@ def grab_history(room, tick):
     if not result.ok:
         if result.status_code == 404:
             return None
+        if result.status_code == 429:
+            raise TooManyRequestsError("{} ({}, at {})".format(result.text, result.status_code, result.url))
         raise ScreepsError("{} ({}, at {})".format(result.text, result.status_code, result.url))
 
     if not len(result.content):
@@ -70,6 +74,7 @@ def process_room(room_name, current_tick):
     :param room_name: The room name to work on
     :param current_tick: The last tick retrieved from the API (not specific to this room, just the latest known tick)
     :return: None if the room needs more processing later, otherwise a finished battle information dict
+    :raises TooManyRequestsError: if any url endpoint results in error 429
     """
     battle_data = redis_data.get_ongoing_data(room_name)
     if battle_data is None:
@@ -360,7 +365,16 @@ def process_all_pending_battles_once():
         else:
             latest_tick = 0
 
-        battle_data = process_room(room_name, latest_tick)
+        try:
+            battle_data = process_room(room_name, latest_tick)
+        except TooManyRequestsError:
+            logger.exception("Error updating room, attempting to sleep 20 seconds.")
+            time.sleep(20)
+            try:
+                battle_data = process_room(room_name, latest_tick)
+            except TooManyRequestsError:
+                logger.exception("Too many requests updating room twice, exiting loop.")
+                break
 
         if battle_data is None:
             if first_room is None:
@@ -370,3 +384,5 @@ def process_all_pending_battles_once():
         logger.debug("Processed {}: submitting to reporting queue!".format(room_name))
 
         redis_queue.submit_processed_battle(room_name, battle_data)
+
+        time.sleep(2)
