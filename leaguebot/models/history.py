@@ -1,4 +1,5 @@
 import requests
+import time
 from requests.packages.urllib3.exceptions import NewConnectionError
 
 from leaguebot import app
@@ -367,8 +368,13 @@ def process_all_pending_battles_once():
         try:
             battle_data = process_room(room_name, latest_tick)
         except TooManyRequestsError:
-            logger.exception("Error updating room, exiting loop.")
-            break
+            logger.exception("Error updating room, attempting to sleep 20 seconds.")
+            time.sleep(20)
+            try:
+                battle_data = process_room(room_name, latest_tick)
+            except TooManyRequestsError:
+                logger.exception("Too many requests updating room twice, exiting loop.")
+                break
 
         if battle_data is None:
             if first_room is None:
@@ -378,3 +384,5 @@ def process_all_pending_battles_once():
         logger.debug("Processed {}: submitting to reporting queue!".format(room_name))
 
         redis_queue.submit_processed_battle(room_name, battle_data)
+
+        time.sleep(2)
